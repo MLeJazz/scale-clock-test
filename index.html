@@ -24,6 +24,15 @@
         select, input[type="number"] { max-width: 100%; }
         #training-root label, #training-root select { max-width: 100%; min-width: 0; }
         .pt-2 { padding-top: 0.5rem; }
+        /* Catalogue : une seule colonne sur téléphone étroit (les 4 boutons ne tiennent pas dans une carte de ~160 px), boutons qui passent à la ligne au besoin */
+        @media (max-width: 559px) { #cat-grid { grid-template-columns: minmax(0, 1fr); } }
+        #cat-grid > div { min-width: 0; }
+        #cat-grid .mt-auto { flex-wrap: wrap; }
+        @media (pointer: coarse) {
+            #cat-grid button[data-play], #cat-grid button[data-fav], #cat-grid button[data-load] { min-height: 44px; }
+            #cat-grid button[data-play], #cat-grid button[data-fav] { min-width: 44px; }
+            #cat-grid button[data-load] { min-width: 52px; }
+        }
         #app-privacy summary { cursor: pointer; }
 
         
@@ -4536,7 +4545,9 @@
             if (!duoRT) return;
             clearInterval(duoRT.id);
             try { duoRT.src.disconnect(); } catch (e) { /* déjà déconnecté */ }
+            try { duoRT.an.disconnect(); } catch (e) { /* déjà déconnecté */ }
             try { duoRT.stream.getTracks().forEach(t => t.stop()); } catch (e) { /* flux déjà arrêté */ }
+            try { if (duoRT.ctx && duoRT.ctx !== audioCtx) duoRT.ctx.close(); } catch (e) { /* déjà fermé */ }   // libère le matériel audio tout de suite
             duoRT = null; micOn = false; setAudioSession('playback');
         }
 
@@ -4978,24 +4989,48 @@
             const fail = msg => { if (cur()) { S.state = 'error'; S.err = msg; renderTraining(); } };
             const md = navigator.mediaDevices;
             if (!md || !md.getUserMedia) { fail(tr('Micro indisponible ici (navigateur incompatible ou page non sécurisée).', 'Microphone unavailable here (unsupported browser or insecure page).')); return; }
+            stopAudio();
+            // iOS : le synthé se met en pause pendant la prise du micro (il repart seul à la prochaine note), et la session audio
+            // doit autoriser l'enregistrement AVANT la demande : à l'arrêt elle est repassée en « playback », qui peut refuser le micro au 2e lancement.
+            if (audioCtx && audioCtx.state === 'running') { try { audioCtx.suspend(); } catch (e) { /* on continue */ } }
+            micOn = true; setAudioSession('play-and-record');
+            // Contexte audio réservé au micro, créé ici (geste de l'utilisateur) et fermé à l'arrêt : iOS libère alors le matériel tout de suite.
+            let micCtx = null;
+            try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) { micCtx = new AC(); if (micCtx.state === 'suspended') micCtx.resume().catch(() => {}); } } catch (e) { micCtx = null; }
+            const release = () => { micOn = false; setAudioSession('playback'); if (micCtx) { try { micCtx.close(); } catch (_) { /* déjà fermé */ } } };
+            const refused = e => e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
+            const deniedMsg = tr('Accès au micro refusé : autorise-le dans ton navigateur, puis réessaie.', 'Microphone access denied: allow it in your browser, then try again.');
             let stream;
-            micOn = true;
             try { stream = await md.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
-            catch (e) { micOn = false; fail(e && e.name === 'NotAllowedError' ? tr('Accès au micro refusé : autorise-le dans ton navigateur, puis réessaie.', 'Microphone access denied: allow it in your browser, then try again.') : tr('Micro introuvable ou déjà utilisé.', 'Microphone not found or already in use.')); return; }
-            if (!cur()) { micOn = false; stream.getTracks().forEach(t => t.stop()); return; }
+            catch (e1) {
+                if (refused(e1)) { release(); fail(deniedMsg); return; }
+                if (e1 && e1.name === 'NotFoundError') { release(); fail(tr('Micro introuvable : branche ou active un micro, puis réessaie.', 'Microphone not found: plug in or enable a microphone, then try again.')); return; }   // inutile de relancer
+                // Sur iPhone, le micro met parfois un instant à se libérer après l'arrêt précédent : on patiente puis on retente une fois, en contraintes simples.
+                await new Promise(r => setTimeout(r, 400));
+                if (!cur()) { release(); return; }
+                try { stream = await md.getUserMedia({ audio: true }); }
+                catch (e2) {
+                    release();
+                    const nm = e2 && e2.name ? ' (' + e2.name + ')' : '';
+                    fail(refused(e2) ? deniedMsg : tr('Le micro n\'a pas pu s\'ouvrir' + nm + '. Attends une seconde puis réessaie ; sinon ferme les autres applications qui utilisent le micro.', 'The microphone could not be opened' + nm + '. Wait a second and try again; otherwise close other apps that use the microphone.'));
+                    return;
+                }
+            }
+            if (!cur()) { release(); stream.getTracks().forEach(t => t.stop()); return; }
             try {
-                const ctx = ensureAudio();
-                if (!ctx) throw new Error('audio');
-                stopAudio();
+                let ctx = micCtx;
+                if (ctx && ctx.state === 'suspended') await Promise.race([ctx.resume(), new Promise(r => setTimeout(r, 800))]);   // ne jamais attendre indéfiniment
+                if (!cur()) { release(); stream.getTracks().forEach(t => t.stop()); return; }
+                if (!ctx) { ctx = ensureAudio(); if (!ctx) throw new Error('audio'); stopAudio(); }   // repli : le contexte commun
                 const src = ctx.createMediaStreamSource(stream), an = ctx.createAnalyser();
                 an.fftSize = 2048;
                 src.connect(an);   // pas de sortie vers les haut-parleurs : pas de larsen
-                duoRT = { stream, src, an, buf: new Float32Array(an.fftSize), cand: -1, n: 0, id: 0, kind, ev: null, cs: [] };
+                duoRT = { stream, ctx: micCtx, src, an, buf: new Float32Array(an.fftSize), cand: -1, n: 0, id: 0, kind, ev: null, cs: [] };
                 duoRT.id = setInterval(duoTick, 60);
                 micOn = true; setAudioSession('play-and-record');
                 S.state = 'listening'; S.t0 = Date.now(); S.last = S.t0;
                 if (kind === 'duo') TRN.duoStats.rounds++;
-            } catch (e) { micOn = false; stream.getTracks().forEach(t => t.stop()); fail(tr('Analyse du son impossible dans ce navigateur.', 'Sound analysis is not possible in this browser.')); return; }
+            } catch (e) { release(); stream.getTracks().forEach(t => t.stop()); fail(tr('Analyse du son impossible dans ce navigateur.', 'Sound analysis is not possible in this browser.')); return; }
             renderTraining();
         }
         async function duoStart() {
