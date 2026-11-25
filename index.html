@@ -348,6 +348,7 @@
         </main>
 
         <main id="content-interactive" class="tab-content p-3 sm:p-6 md:p-8">
+            <h2 class="sr-only"><span class="fr">Simulateur topographique</span><span class="en">Topographical simulator</span></h2>
             <div class="grid grid-cols-1 md:grid-cols-12 gap-8">
                 
                 <div class="md:col-span-4 flex flex-col space-y-4 min-w-0">
@@ -464,7 +465,7 @@
                                 </optgroup>
                             </select>
                             
-                            <div id="controls-2" class="opacity-50 pointer-events-none transition-opacity space-y-3">
+                            <div id="controls-2" aria-disabled="true" class="opacity-50 pointer-events-none transition-opacity space-y-3">
                                 <div class="flex items-center justify-between mt-2">
                                     <label class="text-xs font-bold text-teal-400">
                                         <span class="fr">Rotation (Dérivés)</span><span class="en">Rotation (Derivatives)</span>
@@ -2406,11 +2407,11 @@
                     const controls = document.getElementById('controls-2');
                     if (val === 'none') {
                         L2.subset = null;
-                        if (controls) controls.classList.add('opacity-50', 'pointer-events-none');
+                        if (controls) { controls.classList.add('opacity-50', 'pointer-events-none'); controls.setAttribute('aria-disabled', 'true'); }
                     } else {
                         L2.subset = val.split(',').map(Number);
                         L2.deriv = 0; L2.transpo = 0;
-                        if (controls) controls.classList.remove('opacity-50', 'pointer-events-none');
+                        if (controls) { controls.classList.remove('opacity-50', 'pointer-events-none'); controls.removeAttribute('aria-disabled'); }
                     }
                     drawShape();
                 });
@@ -2534,6 +2535,7 @@
             if (c2) {
                 c2.classList.toggle('opacity-50', !L2.subset);
                 c2.classList.toggle('pointer-events-none', !L2.subset);
+                if (L2.subset) c2.removeAttribute('aria-disabled'); else c2.setAttribute('aria-disabled', 'true');
             }
         }
 
@@ -4872,25 +4874,33 @@
             stopAudio(); tone(60 + G.notes[G.idx].pc - instOff(), c.currentTime + 0.05, 2, 0.25);   // hauteur réelle que l'instrument doit produire
             G.mute = Date.now() + 2400;
         }
-        // Écoute de la suite exacte à jouer (gamme ou arpège, sens choisi, tempo choisi), à la hauteur réelle pour un instrument transpositeur.
+        // Écoute de la suite exacte à jouer (gamme ou arpège, sens et tempo choisis), à la hauteur réelle pour un instrument transpositeur.
+        // La note la plus grave est toujours placée entre Fa#3 et Fa4 : toutes les gammes restent dans le même registre médium.
+        let gtHearing = null;
+        const gtHearLabel = () => (gtHearing ? '■ ' + tr('Arrêter l\'écoute', 'Stop') : '▶ ' + tr('Écouter la gamme', 'Hear the scale'));
+        function gtHearRefresh() { const b = document.getElementById('trn-gt-hear'); if (b) b.textContent = gtHearLabel(); }
+        function gtHearStop() { clearTimeout(gtHearing); gtHearing = null; stopAudio(); gtHearRefresh(); }
         function gtListen() {
             const f = gtForm(), seq = gtSeq(f, GT.r, GT.m, GT.d);
             if (!seq.length) return;
             const c = ensureAudio(); if (!c) return;
             stopAudio();
             const o = instOff(), sh = o > 6 ? o - 12 : o, down = GT.d === 'down', half = GT.d === 'both' ? (seq.length - 1) / 2 : -1;
-            let m = 60 + seq[0] - sh;
+            const rel = [0];
+            for (let i = 1; i < seq.length; i++) {
+                const goDown = down || (GT.d === 'both' && i > half), prev = seq[i - 1], pc = seq[i];
+                const d = goDown ? ((prev - pc + 12) % 12 || 12) : ((pc - prev + 12) % 12 || 12);
+                rel.push(rel[i - 1] + (goDown ? -d : d));
+            }
+            const lo = Math.min(...rel), start = rootMidi(mod12(seq[0] - sh + lo)) - lo;
             const step = GT.bpm ? 60 / GT.bpm : 0.5, t0 = c.currentTime + 0.08;
-            seq.forEach((pc, i) => {
-                if (i > 0) {
-                    const goDown = down || (GT.d === 'both' && i > half), prev = seq[i - 1];
-                    const d = goDown ? ((prev - pc + 12) % 12 || 12) : ((pc - prev + 12) % 12 || 12);
-                    m += goDown ? -d : d;
-                }
-                tone(m, t0 + i * step, step * 0.9, 0.22);
-            });
+            rel.forEach((r, i) => tone(start + r, t0 + i * step, step * 0.9, 0.22));
+            clearTimeout(gtHearing);
+            gtHearing = setTimeout(() => { gtHearing = null; gtHearRefresh(); }, Math.round((seq.length * step + 0.2) * 1000));
+            gtHearRefresh();
         }
         async function gtStart() {
+            clearTimeout(gtHearing); gtHearing = null;
             duoStop('stopped');
             const f = gtForm(), scale = gtScale(f, GT.r), m = GT.m === 'arp' && gtArp(scale) ? 'arp' : 'scale';
             const G = TRN.gt = { state: 'asking', f, scale, tol: GT.tol, d: GT.d, m, bpm: GT.bpm, click: GT.click && GT.bpm > 0, idx: 0, notes: gtNotes(gtSeq(f, GT.r, m, GT.d)), cs: [], okn: 0, mute: 0, pause: 0, tb: 0, B: 0, run0: 0, lm: 0, beatTxt: '', t0: 0, last: 0, events: [], heard: new Set(), order: [], extra: new Set(), err: '' };
@@ -4986,7 +4996,7 @@
                     <p id="trn-gt-hint" class="text-sm" style="color:#cbd5e1">${G.bpm ? tr('Décompte…', 'Count-in…') : tr('Joue ' + noteNames[cur.pc] + '…', 'Play ' + noteNames[cur.pc] + '…')}</p></div>` : ''}
                 <div class="space-y-1" aria-live="polite">${sum}</div>
                 <div class="flex flex-wrap gap-2">${st === 'listening' ? `<button type="button" id="trn-gt-stop" class="px-3 py-1.5 rounded bg-red-800 hover:bg-slate-700 text-xs font-bold text-white">■ ${tr('Arrêter', 'Stop')}</button>${G.bpm ? '' : `<button type="button" id="trn-gt-skip" class="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs font-bold text-white">⏭ ${tr('Passer cette note', 'Skip this note')}</button><button type="button" id="trn-gt-ref" class="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs font-bold text-white">♪ ${tr('Écouter la note', 'Hear the note')}</button>`}`
-                    : `<button type="button" id="trn-gt-start" class="px-3 py-1.5 rounded bg-blue-700 hover:bg-blue-600 text-xs font-bold text-white"${st === 'asking' ? ' disabled' : ''}>🎤 ${over ? tr('Recommencer', 'Start over') : tr('Accorder la gamme (micro)', 'Tune the scale (microphone)')}</button>${st === 'asking' ? '' : `<button type="button" id="trn-gt-hear" class="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs font-bold text-white">▶ ${tr('Écouter la gamme', 'Hear the scale')}</button>`}`}</div>
+                    : `<button type="button" id="trn-gt-start" class="px-3 py-1.5 rounded bg-blue-700 hover:bg-blue-600 text-xs font-bold text-white"${st === 'asking' ? ' disabled' : ''}>🎤 ${over ? tr('Recommencer', 'Start over') : tr('Accorder la gamme (micro)', 'Tune the scale (microphone)')}</button>${st === 'asking' ? '' : `<button type="button" id="trn-gt-hear" class="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs font-bold text-white">${gtHearLabel()}</button>`}`}</div>
                 <p class="text-xs text-slate-400">${tr('Le micro n\'est actif que pendant l\'écoute ; le son est analysé dans ton navigateur : rien n\'est enregistré ni envoyé.', 'The microphone is only on while listening; the sound is analysed in your browser: nothing is recorded or sent.')}</p>
             </section>`;
         }
@@ -5330,7 +5340,7 @@
                 else if (b.id === 'trn-gt-start') gtStart();
                 else if (b.id === 'trn-gt-skip') gtSkip();
                 else if (b.id === 'trn-gt-ref') gtRef();
-                else if (b.id === 'trn-gt-hear') gtListen();
+                else if (b.id === 'trn-gt-hear') { if (gtHearing) gtHearStop(); else gtListen(); }
                 else if (b.id === 'trn-gt-from' && TRN.play) {
                     const m = playResult(TRN.play).exact[0];
                     if (m && m.f.rel.length >= 3) { duoStop('stopped'); GT.f = m.f.fr; GT.r = m.root; TRN.gt = null; saveTrainingPrefs(); renderTraining(); const el = document.getElementById('trn-gt-title'); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start' }); }
