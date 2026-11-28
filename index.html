@@ -212,6 +212,22 @@
         @media (pointer: coarse) { #cat-grid button[data-more] { min-height: 44px; } }
         #cat-grid button[data-more] { min-width: 64px; }
     </style>
+    <style id="v4143">
+        /* Cours : titre, flèches et pied de page ne débordent plus sur téléphone étroit */
+        #masterclass-title { overflow-wrap: anywhere; }
+        #mc-head > div:last-child { flex-shrink: 0; }
+        @media (max-width: 639px) {
+            #mc-card { padding: 1rem; }
+            #mc-head { flex-direction: column; align-items: stretch; gap: .75rem; }
+            #mc-head > div:last-child { display: grid; grid-template-columns: 1fr 1fr; }
+            #mc-head > div:last-child button { min-height: 44px; font-size: .875rem; }
+            #masterclass-title { font-size: 1.25rem; line-height: 1.3; }
+            #mc-foot { flex-wrap: wrap; row-gap: .75rem; }
+            #mc-foot #page-dots { order: -1; width: 100%; }
+            #mc-foot > button { flex: 1 1 0; min-height: 44px; font-size: .8rem; white-space: nowrap; padding-left: .25rem; padding-right: .25rem; display: flex; align-items: center; justify-content: center; gap: .3rem; }
+            #mc-foot > button:first-of-type { margin-right: .5rem; }
+        }
+    </style>
 </head>
 <body class="p-4 md:p-8">
 
@@ -680,10 +696,10 @@
         </main>
 
         <main id="content-masterclass" class="tab-content p-6 md:p-8">
-            <div class="max-w-4xl mx-auto bg-slate-900 p-6 md:p-10 rounded-xl border border-slate-700 shadow-inner space-y-8">
+            <div id="mc-card" class="max-w-4xl mx-auto bg-slate-900 p-6 md:p-10 rounded-xl border border-slate-700 shadow-inner space-y-8">
                 
-                <div class="flex justify-between items-center border-b border-slate-700 pb-4">
-                    <div>
+                <div id="mc-head" class="flex justify-between items-center border-b border-slate-700 pb-4">
+                    <div class="min-w-0">
                         <p class="text-xs text-blue-400 font-bold uppercase tracking-widest mb-1" id="masterclass-subtitle">Chapitre 1 sur 11</p>
                         <h2 class="text-2xl md:text-3xl font-bold text-white" id="masterclass-title">La Révolution Topographique de Masaya Yamaguchi</h2>
                     </div>
@@ -1454,7 +1470,7 @@
 
                 </div>
 
-                <div class="flex justify-between items-center border-t border-slate-700 pt-6">
+                <div id="mc-foot" class="flex justify-between items-center border-t border-slate-700 pt-6">
                     <button onclick="changeMasterclassPage(-1)" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-xs font-bold text-slate-300 transition-colors">◀ <span class="fr">Précédent</span><span class="en">Prev</span></button>
                     <div class="flex gap-2 flex-wrap justify-center" id="page-dots">
                         <!-- Points générés par JS -->
@@ -2643,6 +2659,7 @@
             activeOsc.forEach(o => { try { o.stop(); } catch (e) { /* déjà arrêté */ } });
             activeOsc = [];
             clearGsTimers();
+            gtHearReset();
         }
         function ascendingMidis(absSet, rootAbs) {
             const base = rootMidi(rootAbs);
@@ -4879,7 +4896,9 @@
         let gtHearing = null;
         const gtHearLabel = () => (gtHearing ? '■ ' + tr('Arrêter l\'écoute', 'Stop') : '▶ ' + tr('Écouter la gamme', 'Hear the scale'));
         function gtHearRefresh() { const b = document.getElementById('trn-gt-hear'); if (b) b.textContent = gtHearLabel(); }
-        function gtHearStop() { clearTimeout(gtHearing); gtHearing = null; stopAudio(); gtHearRefresh(); }
+        function gtHearStop() { stopAudio(); }
+        // Appelée par stopAudio() : le bouton ne reste jamais sur « Arrêter » quand le son est déjà coupé (try : stopAudio peut s'exécuter avant la déclaration de gtHearing).
+        function gtHearReset() { try { if (gtHearing === null) return; clearTimeout(gtHearing); gtHearing = null; gtHearRefresh(); } catch (e) { /* pas encore initialisé */ } }
         function gtListen() {
             const f = gtForm(), seq = gtSeq(f, GT.r, GT.m, GT.d);
             if (!seq.length) return;
@@ -5265,6 +5284,7 @@
             root.addEventListener('change', e => {
                 if (/^trn-gt-(form|root|tol|dir|kind|bpm|click)$/.test(e.target.id)) {
                     duoStop('stopped');
+                    stopAudio();   // une écoute de la gamme en cours s'arrête quand on change un réglage
                     if (e.target.id === 'trn-gt-form') GT.f = String(e.target.value).slice(0, 120);
                     else if (e.target.id === 'trn-gt-root') { const r = parseInt(e.target.value, 10); if (r >= 0 && r <= 11) GT.r = r; }
                     else if (e.target.id === 'trn-gt-dir') { if (['up', 'down', 'both'].includes(e.target.value)) GT.d = e.target.value; }
